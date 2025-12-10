@@ -2,55 +2,107 @@ on:
   workflow_dispatch:
     inputs:
       tags:
-        description: 'Test scenario tags'
-        required: true
+        description: 'Test scenario tags (optional). If empty, the workflow will checkout the latest tag.'
+        required: false
+        default: ''
         type: string
-      
-  # push:
-  #   branches:
-  #     - main
+      # We default to production because you want to build locally and promote to production
+      environment:
+        description: 'Deployment environment: preview or production (defaults to production)'
+        required: false
+        default: 'production'
+        type: string
+
 name: deploy-waxz/lobe-chat
 env:
   VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
   VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-  
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    name: Deploy
+    name: Build locally and deploy (promote) to Vercel production
     permissions:
       contents: read
       deployments: write
     steps:
-    - name: Print the input tag to STDOUT
-      run: echo  The tags are ${{ inputs.tags }} 
-    - uses: actions/checkout@v5
+    - name: Print inputs
+      run: echo "tags='${{ github.event.inputs.tags }}' environment='${{ github.event.inputs.environment }}'"
+
+    - name: Checkout lobe-chat (specific tag)
+      if: ${{ github.event.inputs.tags != '' }}
+      uses: actions/checkout@v5
       with:
-          repository: lobehub/lobe-chat
-          path: ./lobe-chat
-          submodules: recursive
-          ref: ${{ inputs.tags }}
-          fetch-tags : true
+        repository: lobehub/lobe-chat
+        path: ./lobe-chat
+        submodules: recursive
+        ref: ${{ github.event.inputs.tags }}
+        fetch-tags: true
+
+    - name: Checkout lobe-chat (default branch)
+      if: ${{ github.event.inputs.tags == '' }}
+      uses: actions/checkout@v5
+      with:
+        repository: lobehub/lobe-chat
+        path: ./lobe-chat
+        submodules: recursive
+        fetch-tags: true
+
+    - name: Use latest tag if tags input is empty
+      if: ${{ github.event.inputs.tags == '' }}
+      run: |
+        set -euo pipefail
+        cd ./lobe-chat
+        git fetch --tags --force
+        # Choose the most recent tag by creation date. Adjust sorting if you prefer semver.
+        LATEST_TAG=$(git for-each-ref --sort=-creatordate --format '%(refname:strip=2)' refs/tags | head -n1 || true)
+        if [ -z "$LATEST_TAG" ]; then
+          echo "No tags found in repository; staying on the checked-out branch."
+        else
+          echo "Latest tag detected: $LATEST_TAG"
+          git checkout "$LATEST_TAG"
+          echo "Checked out $LATEST_TAG"
+          echo "selected_tag=$LATEST_TAG" >> "$GITHUB_OUTPUT"
+        fi
+
     - uses: actions/setup-node@v5
       with:
-          node-version: 22
+        node-version: 22
+
     - name: Setup Bun
-      uses: oven-sh/setup-bun@v1 # Use the latest stable version
+      uses: oven-sh/setup-bun@v1
+
     - name: Install Vercel CLI
       run: |
-          #npm install --global vercel@43.3.0
-          bun add -g vercel@latest
-    - name: Pull Vercel Environment Information
+        bun add -g vercel@latest
+
+    - name: Pull Vercel environment (production)
       run: |
-          cd ./lobe-chat
-          npx fix-react2shell-next
-          vercel pull --yes --environment=preview --token=${{ secrets.VERCEL_TOKEN }}
-    - name: Build Project Artifacts
+        set -euo pipefail
+        cd ./lobe-chat
+        npx fix-react2shell-next || true
+        # Use production by default for pulling env and secrets
+        ENV="${{ github.event.inputs.environment }}"
+        if [ -z "$ENV" ]; then
+          ENV="production"
+        fi
+        echo "Using Vercel environment: $ENV"
+        vercel pull --yes --environment="$ENV" --token=${{ secrets.VERCEL_TOKEN }}
+
+    - name: Build production prebuilt artifacts locally
       run: |
-          cd ./lobe-chat
-          vercel build --token=${{ secrets.VERCEL_TOKEN }}
-    - name: Deploy Project Artifacts to Vercel
+        set -euo pipefail
+        cd ./lobe-chat
+        # Ensure we build for production so the prebuilt can be promoted
+        vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+    - name: Create production prebuilt archive and deploy to Vercel
       run: |
-          cd ./lobe-chat
-          vercel deploy --prebuilt --token=${{ secrets.VERCEL_TOKEN }} --archive=tgz
-          # vercel --prod --token=${{ secrets.VERCEL_TOKEN }} --archive=tgz
+        set -euo pipefail
+        cd ./lobe-chat
+        # Deploy the prebuilt production artifacts to Vercel production
+        vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }} --archive=tgz
+
+    - name: Output deployed URL
+      run: |
+        echo "Deployment finished. Check Vercel for the production deployment URL."

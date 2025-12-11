@@ -80,7 +80,7 @@ jobs:
       run: |
         set -euo pipefail
         cd ./lobe-chat
-        npx fix-react2shell-next || true
+        npx fix-react2shell-next --fix || true
         # Use production by default for pulling env and secrets
         ENV="${{ github.event.inputs.environment }}"
         if [ -z "$ENV" ]; then

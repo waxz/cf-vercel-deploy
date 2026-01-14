@@ -26,8 +26,8 @@ jobs:
           npm i
           npm run build
           mkdir -p cf
-          cp ./dist/inddex.js ./cf/_worker.js
-          cp ./dist/inddex.js.map ./cf/_worker.js.map
+          cp ./dist/index.js ./cf/_worker.js
+          cp ./dist/index.js.map ./cf/_worker.js.map
         env:
           GEMINI_CLI_KV_ID: ${{ secrets.GEMINI_CLI_KV_ID }}
 

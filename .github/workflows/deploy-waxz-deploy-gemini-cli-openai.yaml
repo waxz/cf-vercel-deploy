@@ -45,6 +45,7 @@ jobs:
         run: |
           cd ./gemini-cli-openai            
           sed -i "s#main.*#pages_build_output_dir = \"./cf\"#" ./wrangler.toml
+          sed -i '/# wrangler.toml (wrangler v3.88.0\^)/d; /\[observability.logs\]/{N;d;}' wrangler.toml
           
       - name: Deploy Pages
         uses: cloudflare/wrangler-action@v3

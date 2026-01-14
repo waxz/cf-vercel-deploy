@@ -18,67 +18,16 @@ jobs:
           repository: waxz/gemini-cli-openai
           path: ./gemini-cli-openai
           submodules: recursive
-      - name: Setup Deno
-        uses: denoland/setup-deno@v2
-
-        
       - name: Create wrangler configure file
         shell: bash
         run: |
           cd ./gemini-cli-openai
           sed  -i "s#.*{ binding =.*#{ binding = \"GEMINI_CLI_KV\", id = \"$GEMINI_CLI_KV_ID\"}#" ./wrangler.toml
-          
-          
-          cat << EOF > ./build.ts
-          import { emptyDirSync } from "jsr:@std/fs"
-          emptyDirSync("./dist");
-          new Deno.Command(Deno.execPath(), { args: ["bundle", "src/index.ts", "-o", "dist/_worker.js", "--sourcemap"]}).outputSync();
-          EOF
-
-          # deno.jsonc
-          cat << EOF > ./deno.jsonc
-          {
-            "exclude": ["./dist", "./coverage"],
-            "lock": {
-              "frozen": false
-            },
-            "tasks": {
-              "start:deno": "deno run --allow-net --allow-env main_deno.ts",
-              "build:deno": "deno run -A build.ts",
-              "test:deno": "deno test --allow-net --allow-env --coverage --no-check"
-            },
-            "imports": {
-              "openapi-format": "https://esm.sh/openapi-format?bundle",
-              "itty-router/": "npm:/itty-router/",
-              "eventsource-parser/": "npm:/eventsource-parser/",
-              "@hono/node-server": "npm:/@hono/node-server"
-            },
-            "lint": {
-              "rules": {
-                "exclude": ["no-import-prefix"]
-              }
-            },
-            "nodeModulesDir": "none",
-            "fmt": {
-              "exclude": ["*"]
-            },
-            "compilerOptions": {
-              "useUnknownInCatchVariables": false,
-              "lib": [
-                "ESNext.Array",
-                "DOM",
-                "DOM.AsyncIterable",
-                "DOM.Iterable",
-                "ESNext",
-                "ESNext.Disposable",
-                "ESNext.AsyncIterable",
-                "deno.ns"
-              ]
-            }
-          }
-          EOF
-          deno run -A build.ts
-          
+          npm i
+          npm run build
+          mkdir -p cf
+          cp ./dist/inddex.js ./cf/_worker.js
+          cp ./dist/inddex.js.map ./cf/_worker.js.map
         env:
           GEMINI_CLI_KV_ID: ${{ secrets.GEMINI_CLI_KV_ID }}
 
@@ -90,4 +39,4 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: |
             deploy
-            pages deploy ./dist --project-name gemini-cli-worker
+            pages deploy ./cf --project-name gemini-cli-worker

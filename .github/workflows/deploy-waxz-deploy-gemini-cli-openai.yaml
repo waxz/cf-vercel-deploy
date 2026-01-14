@@ -28,10 +28,11 @@ jobs:
           mkdir -p cf
           cp ./dist/index.js ./cf/_worker.js
           cp ./dist/index.js.map ./cf/_worker.js.map
+          
         env:
           GEMINI_CLI_KV_ID: ${{ secrets.GEMINI_CLI_KV_ID }}
 
-      - name: Deploy Worker
+      - name: Deploy Workers
         uses: cloudflare/wrangler-action@v3
         with:
           workingDirectory: "./gemini-cli-openai"
@@ -39,4 +40,17 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: |
             deploy
+      - name: Change wrangler configure file
+        shell: bash
+        run: |
+          cd ./gemini-cli-openai            
+          sed -i "s#main.*#pages_build_output_dir = \"./cf\"#" ./wrangler.toml
+          
+      - name: Deploy Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          workingDirectory: "./gemini-cli-openai"
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: |
             pages deploy ./cf --project-name gemini-cli-worker

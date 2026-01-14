@@ -39,4 +39,4 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           command: |
             deploy
-            pages deploy ./cf --project-name gemini-cli-worker
+            pages deploy ./cf --project-name gemini-cli-worker --compatibility-date 2025-10-04

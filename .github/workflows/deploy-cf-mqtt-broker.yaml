@@ -31,6 +31,8 @@ jobs:
         run: |
           cd ./repo
           cargo install worker-build
+          echo "list pwd: $(pwd)"
+          ls -alh
           worker-build build --release
           
         env:

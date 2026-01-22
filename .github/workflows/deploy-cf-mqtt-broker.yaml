@@ -31,9 +31,7 @@ jobs:
         run: |
           cd ./repo
           cargo install worker-build
-          echo "list pwd: $(pwd)"
-          ls -alh
-          worker-build build --release
+          worker-build --release
           
         env:
           GEMINI_CLI_KV_ID: ${{ secrets.GEMINI_CLI_KV_ID }}

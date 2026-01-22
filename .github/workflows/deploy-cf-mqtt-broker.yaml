@@ -20,18 +20,7 @@ jobs:
           submodules: recursive
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          # Rust toolchain specification -- see https://rust-lang.github.io/rustup/concepts/toolchains.html#toolchain-specification
-          # https://rust-lang.github.io/rustup-components-history/
-          toolchain: default
-          # Comma-separated list of target triples to install for this toolchain
-          targets: # optional
-          # Alias for `targets`
-          target: wasm32-unknown-unknown
-          # optional
-          # Comma-separated list of components to be additionally installed
-          components: # optional
+        run: rustup default stable
           
       - run: rustup toolchain install stable --profile minimal
       - name: Rust Cache

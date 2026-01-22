@@ -3,7 +3,7 @@ on:
   # push:
   #   branches:
   #     - main
-name: deploy-waxz/waxz/cf-mqtt-broker
+name: deploy-waxz/cf-mqtt-broker
 
 jobs:
   deploy:
@@ -23,11 +23,13 @@ jobs:
         uses: dtolnay/rust-toolchain@v1
         with:
           # Rust toolchain specification -- see https://rust-lang.github.io/rustup/concepts/toolchains.html#toolchain-specification
-          toolchain: 
+          # https://rust-lang.github.io/rustup-components-history/
+          toolchain: default
           # Comma-separated list of target triples to install for this toolchain
           targets: # optional
           # Alias for `targets`
-          target: # optional
+          target: wasm32-unknown-unknown
+          # optional
           # Comma-separated list of components to be additionally installed
           components: # optional
           

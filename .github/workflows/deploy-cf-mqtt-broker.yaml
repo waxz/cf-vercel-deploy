@@ -25,6 +25,8 @@ jobs:
       - run: rustup toolchain install stable --profile minimal
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2.8.2
+        with:
+          workspaces: "./repo"
   
       - name: Build Rust
         shell: bash

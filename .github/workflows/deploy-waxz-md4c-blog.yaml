@@ -27,7 +27,8 @@ name: deploy-waxz/md4c-blog
 # Only the two secrets the other workflows use are needed:
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
 # Everything else (buckets, public URL, Access application and policy, AUD
-# tag, team domain) is created or discovered by
+# tag, team domain, the admin's settings KV namespace) is created or
+# discovered by
 # .github/scripts/md4c-blog-cloudflare.mjs. See the README for the token
 # permissions and the one-time Zero Trust step.
 
@@ -107,7 +108,12 @@ jobs:
           ACCESS_TEAM_DOMAIN: ${{ steps.cf.outputs.access_team_domain }}
           ACCESS_AUD: ${{ steps.cf.outputs.access_aud }}
           PUBLIC_URL: ${{ steps.cf.outputs.public_url }}
+          KV_ID: ${{ steps.cf.outputs.kv_namespace_id }}
         run: |
+          kv=''
+          if [ -n "$KV_ID" ]; then
+            kv=$(printf '[[kv_namespaces]]\nbinding = "SETTINGS"\nid = "%s"' "$KV_ID")
+          fi
           if [ "$ON_WORKERS_DEV" = "true" ]; then
             route='workers_dev = true'
           else
@@ -133,6 +139,8 @@ jobs:
           [[r2_buckets]]
           binding = "DRAFTS"
           bucket_name = "$DRAFTS_BUCKET"
+
+          $kv
 
           [vars]
           ACCESS_TEAM_DOMAIN = "$ACCESS_TEAM_DOMAIN"

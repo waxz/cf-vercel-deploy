@@ -11,9 +11,12 @@
 //   5. a Cloudflare Access application for the admin hostname, with an
 //      "allow" policy for ADMIN_EMAILS (needed on the first run; later runs
 //      keep the existing list unless new emails are given), and its AUD tag
+//   6. a KV namespace for storage added on the admin's Storage page
+//      (optional: without "Workers KV Storage: Edit" on the token, the admin
+//      keeps such storage in each browser instead)
 //
 // Results go to $GITHUB_OUTPUT (and stdout): public_url, admin_host,
-// admin_on_workers_dev, access_team_domain, access_aud.
+// admin_on_workers_dev, access_team_domain, access_aud, kv_namespace_id.
 
 import { appendFileSync } from 'node:fs';
 
@@ -27,6 +30,7 @@ const BLOG_DOMAIN = (process.env.BLOG_DOMAIN ?? '').trim().toLowerCase();
 const ADMIN_DOMAIN = (process.env.ADMIN_DOMAIN ?? '').trim().toLowerCase();
 const EMAILS = (process.env.ADMIN_EMAILS ?? '').split(/[\s,]+/).map((e) => e.trim().toLowerCase()).filter(Boolean);
 const POLICY_NAME = `md4c blog admins (${WORKER_NAME})`;
+const KV_TITLE = `${WORKER_NAME}-settings`;
 
 // What each API area needs, to turn a 403 into an actionable message.
 const PERMISSION = {
@@ -35,6 +39,7 @@ const PERMISSION = {
   access: 'Account → Access: Apps and Policies: Edit',
   org: 'Account → Access: Organizations, Identity Providers, and Groups: Read',
   zones: 'Zone → Zone: Read (for custom domains)',
+  kv: 'Account → Workers KV Storage: Edit',
 };
 
 class SetupError extends Error {}
@@ -184,6 +189,29 @@ async function ensureAccessApp(host) {
   return app.aud;
 }
 
+/** The settings KV namespace's id, created if needed; '' without permission. */
+async function ensureKv() {
+  try {
+    for (let page = 1; ; page++) {
+      const list = await cf('GET', acct(`/storage/kv/namespaces?per_page=100&page=${page}`), undefined, 'kv');
+      const found = list.find((n) => n.title === KV_TITLE);
+      if (found) {
+        log(`✓ KV namespace ${KV_TITLE} exists`);
+        return found.id;
+      }
+      if (list.length < 100) break;
+    }
+    const created = await cf('POST', acct('/storage/kv/namespaces'), { title: KV_TITLE }, 'kv');
+    log(`✓ created KV namespace ${KV_TITLE}`);
+    return created.id;
+  } catch (err) {
+    if (err.status !== 403 && err.status !== 401) throw err;
+    console.log(`::warning::No KV namespace: the API token lacks "${PERMISSION.kv}". ` +
+      'The admin works, but storage added on its Storage page can only be kept in each browser.');
+    return '';
+  }
+}
+
 function output(values) {
   const lines = Object.entries(values).map(([k, v]) => `${k}=${v}`);
   if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `${lines.join('\n')}\n`);
@@ -207,12 +235,14 @@ async function main() {
   const { host, workersDev } = await adminHost();
   const team = await teamDomain();
   const aud = await ensureAccessApp(host);
+  const kv = await ensureKv();
   output({
     public_url: url,
     admin_host: host,
     admin_on_workers_dev: String(workersDev),
     access_team_domain: team,
     access_aud: aud,
+    kv_namespace_id: kv,
   });
 }
 

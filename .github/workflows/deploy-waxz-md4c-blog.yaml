@@ -1,58 +1,35 @@
 on:
   workflow_dispatch:
     inputs:
-      md4c_ref:
-        description: "Branch, tag or commit of waxz/md4c to deploy"
-        default: "claude/wasm-browser-blog"
-        required: true
-      deploy_site:
-        description: "Publish the blog site (code, theme, rebuilt pages) to R2"
-        type: boolean
-        default: true
-      deploy_admin:
-        description: "Deploy the admin Worker (needs the ADMIN_* / ACCESS_* settings)"
-        type: boolean
-        default: true
+      admin_email:
+        description: "Admin email(s), comma separated. Needed on the first run; leave empty later to keep the current list"
+        default: ""
+      blog_domain:
+        description: "Optional: blog hostname (e.g. blog.example.com). Empty = the bucket's r2.dev URL"
+        default: ""
+      admin_domain:
+        description: "Optional: admin hostname (e.g. admin.example.com). Empty = <worker>.<subdomain>.workers.dev"
+        default: ""
       seed_samples:
-        description: "Also upload the sample posts in blog/posts (first deploy only)"
+        description: "Upload the sample posts (first run only)"
         type: boolean
         default: false
-      full_rebuild:
-        description: "Re-render every page (normally only changed posts are)"
-        type: boolean
-        default: false
+      md4c_ref:
+        description: "Branch, tag or commit of waxz/md4c"
+        default: "claude/wasm-browser-blog"
 
 name: deploy-waxz/md4c-blog
 
-# Deploys the md4c blog (wasm/ in waxz/md4c) to Cloudflare:
-#   - the public blog: static files in an R2 bucket, read by visitors through
-#     the bucket's public URL / custom domain
-#   - the admin Worker on its own hostname, behind Cloudflare Access
+# Deploys the md4c blog (wasm/ in waxz/md4c):
+#   - the blog: static files in a public R2 bucket
+#   - the admin Worker, protected by Cloudflare Access
 #
-# Secrets (already used by the other workflows here):
-#   CLOUDFLARE_API_TOKEN   needs Workers Scripts: Edit, Workers R2 Storage: Edit,
-#                          and for custom domains Workers Routes + DNS: Edit on the zone
-#   CLOUDFLARE_ACCOUNT_ID
-# Optional secrets:
-#   R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY  separate R2 S3 keys; by default they
-#                          are derived from CLOUDFLARE_API_TOKEN
-#   BLOG_ACCESS_AUD        Access application AUD tag (or the variable of the same name)
-#
-# Repository variables (Settings → Secrets and variables → Actions → Variables):
-#   BLOG_BUCKET            public bucket            (default: md4c-blog)
-#   BLOG_DRAFTS_BUCKET     private drafts bucket    (default: md4c-blog-drafts)
-#   BLOG_DOMAIN            e.g. blog.example.com: connected to the public bucket
-#   BLOG_ZONE_ID           zone id of BLOG_DOMAIN / ADMIN_DOMAIN
-#   BLOG_SITE_JSON         optional "site" settings JSON; replaces the ones in
-#                          index.json on every deploy, so leave unset to edit them
-#                          in the admin instead
-#   ADMIN_DOMAIN           e.g. admin.blog.example.com (the admin Worker's custom domain)
-#   ADMIN_WORKER_NAME      (default: md4c-blog-admin)
-#   BLOG_ACCESS_TEAM_DOMAIN  https://<team>.cloudflareaccess.com
-#   BLOG_ACCESS_AUD        the Access application's AUD tag
-#   BLOG_ADMIN_EMAILS      comma-separated admin emails
-#   BLOG_DRAFT_STORES      optional DRAFT_STORES JSON (e.g. to add a WebDAV store);
-#                          set store passwords once with `wrangler secret put`
+# Only the two secrets the other workflows use are needed:
+#   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID
+# Everything else (buckets, public URL, Access application and policy, AUD
+# tag, team domain) is created or discovered by
+# .github/scripts/md4c-blog-cloudflare.mjs. See the README for the token
+# permissions and the one-time Zero Trust step.
 
 jobs:
   deploy:
@@ -64,158 +41,85 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-      BLOG_BUCKET: ${{ vars.BLOG_BUCKET || 'md4c-blog' }}
-      BLOG_DRAFTS_BUCKET: ${{ vars.BLOG_DRAFTS_BUCKET || 'md4c-blog-drafts' }}
-      BLOG_DOMAIN: ${{ vars.BLOG_DOMAIN }}
-      BLOG_ZONE_ID: ${{ vars.BLOG_ZONE_ID }}
-      ADMIN_DOMAIN: ${{ vars.ADMIN_DOMAIN }}
-      ADMIN_WORKER_NAME: ${{ vars.ADMIN_WORKER_NAME || 'md4c-blog-admin' }}
+      BLOG_BUCKET: md4c-blog
+      DRAFTS_BUCKET: md4c-blog-drafts
+      WORKER_NAME: md4c-blog-admin
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+        with:
+          path: ./deploy
+
+      - uses: actions/checkout@v5
         with:
           repository: waxz/md4c
           ref: ${{ inputs.md4c_ref }}
           path: ./md4c
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
           cache: npm
           cache-dependency-path: ./md4c/wasm/package-lock.json
 
-      - name: Install clang and lld (WebAssembly toolchain)
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang lld
-
-      - name: Build md4c.wasm, the site and the admin app
+      - name: Build and test
         working-directory: ./md4c/wasm
         run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clang lld
           npm ci
-          OPTFLAGS='-O2 -Werror' npm run build
+          npm run build
           npm test
 
-      - name: Check settings
-        shell: bash
-        run: |
-          [ -n "$CLOUDFLARE_API_TOKEN" ] || { echo "::error::Secret CLOUDFLARE_API_TOKEN is not set"; exit 1; }
-          [ -n "$CLOUDFLARE_ACCOUNT_ID" ] || { echo "::error::Secret CLOUDFLARE_ACCOUNT_ID is not set"; exit 1; }
-          # Values end up in a TOML file: keep them to plain, safe characters.
-          for v in BLOG_BUCKET BLOG_DRAFTS_BUCKET; do
-            [[ "${!v}" =~ ^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$ ]] || { echo "::error::$v must be a valid R2 bucket name"; exit 1; }
-          done
-          for v in BLOG_DOMAIN ADMIN_DOMAIN; do
-            [ -z "${!v}" ] || [[ "${!v}" =~ ^[A-Za-z0-9.-]+$ ]] || { echo "::error::$v must be a bare hostname, e.g. blog.example.com"; exit 1; }
-          done
-          [[ "$ADMIN_WORKER_NAME" =~ ^[a-z0-9][a-z0-9-]{0,62}$ ]] || { echo "::error::ADMIN_WORKER_NAME must be lowercase letters, digits and dashes"; exit 1; }
-
-      - name: Ensure R2 buckets exist
-        working-directory: ./md4c/wasm
-        shell: bash
-        run: |
-          for b in "$BLOG_BUCKET" "$BLOG_DRAFTS_BUCKET"; do
-            if out=$(npx --yes wrangler@4 r2 bucket create "$b" 2>&1); then
-              echo "Created bucket $b"
-            elif grep -qiE "already exists|already own" <<<"$out"; then
-              echo "Bucket $b exists"
-            else
-              echo "$out"; exit 1
-            fi
-          done
-          echo "The drafts bucket stays private: never enable public access on $BLOG_DRAFTS_BUCKET."
-
-      - name: Connect the blog domain to the public bucket
-        if: ${{ inputs.deploy_site && vars.BLOG_DOMAIN != '' && vars.BLOG_ZONE_ID != '' }}
-        working-directory: ./md4c/wasm
-        shell: bash
-        run: |
-          if npx --yes wrangler@4 r2 bucket domain list "$BLOG_BUCKET" 2>&1 | grep -qF "$BLOG_DOMAIN"; then
-            echo "$BLOG_DOMAIN is already connected to $BLOG_BUCKET"
-          else
-            npx --yes wrangler@4 r2 bucket domain add "$BLOG_BUCKET" --domain "$BLOG_DOMAIN" --zone-id "$BLOG_ZONE_ID" --force
-          fi
-
-      - name: R2 S3 credentials
-        if: ${{ inputs.deploy_site }}
-        shell: bash
+      - name: Set up Cloudflare (buckets, public URL, Access)
+        id: cf
         env:
-          R2_ACCESS_KEY_ID_SECRET: ${{ secrets.R2_ACCESS_KEY_ID }}
-          R2_SECRET_ACCESS_KEY_SECRET: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          ADMIN_EMAILS: ${{ inputs.admin_email }}
+          BLOG_DOMAIN: ${{ inputs.blog_domain }}
+          ADMIN_DOMAIN: ${{ inputs.admin_domain }}
+        run: node ./deploy/.github/scripts/md4c-blog-cloudflare.mjs
+
+      - name: Publish the blog
+        working-directory: ./md4c/wasm
+        env:
+          PUBLIC_URL: ${{ steps.cf.outputs.public_url }}
         run: |
-          # The publish script talks to R2's S3 API. Cloudflare derives S3 keys
-          # from an API token: Access Key ID = the token's id,
-          # Secret Access Key = SHA-256 of the token's value.
-          if [ -n "$R2_ACCESS_KEY_ID_SECRET" ] && [ -n "$R2_SECRET_ACCESS_KEY_SECRET" ]; then
-            id="$R2_ACCESS_KEY_ID_SECRET"; secret="$R2_SECRET_ACCESS_KEY_SECRET"
-          else
-            auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
-            id=$(curl -sS -H "$auth" https://api.cloudflare.com/client/v4/user/tokens/verify | jq -r '.result.id // empty')
-            [ -n "$id" ] || id=$(curl -sS -H "$auth" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" | jq -r '.result.id // empty')
-            [ -n "$id" ] || { echo "::error::Could not look up the API token's id (is CLOUDFLARE_API_TOKEN valid?)"; exit 1; }
-            secret=$(printf '%s' "$CLOUDFLARE_API_TOKEN" | sha256sum | cut -d' ' -f1)
-          fi
+          # R2's S3 API keys come from the API token itself:
+          # Access Key ID = the token's id, secret = SHA-256 of the token.
+          auth="Authorization: Bearer $CLOUDFLARE_API_TOKEN"
+          id=$(curl -sS -H "$auth" https://api.cloudflare.com/client/v4/user/tokens/verify | jq -r '.result.id // empty')
+          [ -n "$id" ] || id=$(curl -sS -H "$auth" "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/tokens/verify" | jq -r '.result.id // empty')
+          [ -n "$id" ] || { echo "::error::Could not verify CLOUDFLARE_API_TOKEN"; exit 1; }
+          secret=$(printf '%s' "$CLOUDFLARE_API_TOKEN" | sha256sum | cut -d' ' -f1)
           echo "::add-mask::$id"
           echo "::add-mask::$secret"
-          {
-            echo "R2_ACCOUNT_ID=$CLOUDFLARE_ACCOUNT_ID"
-            echo "R2_BUCKET=$BLOG_BUCKET"
-            echo "R2_ACCESS_KEY_ID=$id"
-            echo "R2_SECRET_ACCESS_KEY=$secret"
-          } >> "$GITHUB_ENV"
 
-      - name: Publish the site to R2
-        if: ${{ inputs.deploy_site }}
-        working-directory: ./md4c/wasm
-        shell: bash
-        env:
-          BLOG_SITE_JSON: ${{ vars.BLOG_SITE_JSON }}
-        run: |
-          # Uploads the site's code and rebuilds index.json, the pages, feed and
-          # sitemap from the posts already in the bucket. Posts written in the
-          # admin are never touched; sample posts are uploaded only on request.
-          args=(--to r2 --site)
-          if [ "${{ inputs.seed_samples }}" = "true" ]; then args+=(--posts blog/posts); else args+=(--no-posts); fi
-          [ "${{ inputs.full_rebuild }}" = "true" ] && args+=(--full)
-          if [ -n "$BLOG_SITE_JSON" ]; then
-            printf '%s' "$BLOG_SITE_JSON" > "$RUNNER_TEMP/site.json"
-            node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' "$RUNNER_TEMP/site.json"
-            args+=(--config "$RUNNER_TEMP/site.json")
-          fi
-          node scripts/publish.mjs "${args[@]}"
+          # Uploads the site's code and rebuilds the pages from the posts in
+          # the bucket; posts written in the admin are never touched.
+          posts=(--no-posts)
+          [ "${{ inputs.seed_samples }}" = "true" ] && posts=(--posts blog/posts)
+          R2_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" R2_BUCKET="$BLOG_BUCKET" R2_ACCESS_KEY_ID="$id" R2_SECRET_ACCESS_KEY="$secret" \
+            node scripts/publish.mjs --to r2 --site "${posts[@]}" --site-url "$PUBLIC_URL"
 
       - name: Write the admin Worker config
-        if: ${{ inputs.deploy_admin }}
         working-directory: ./md4c/wasm
-        shell: bash
         env:
-          ACCESS_TEAM_DOMAIN: ${{ vars.BLOG_ACCESS_TEAM_DOMAIN }}
-          ACCESS_AUD: ${{ secrets.BLOG_ACCESS_AUD || vars.BLOG_ACCESS_AUD }}
-          ADMIN_EMAILS: ${{ vars.BLOG_ADMIN_EMAILS }}
-          DRAFT_STORES: ${{ vars.BLOG_DRAFT_STORES }}
+          ADMIN_HOST: ${{ steps.cf.outputs.admin_host }}
+          ON_WORKERS_DEV: ${{ steps.cf.outputs.admin_on_workers_dev }}
+          ACCESS_TEAM_DOMAIN: ${{ steps.cf.outputs.access_team_domain }}
+          ACCESS_AUD: ${{ steps.cf.outputs.access_aud }}
+          PUBLIC_URL: ${{ steps.cf.outputs.public_url }}
         run: |
-          # Never deploy the admin without Cloudflare Access in front of it.
-          [ -n "$ADMIN_DOMAIN" ] || { echo "::error::Set the ADMIN_DOMAIN variable (e.g. admin.blog.example.com)"; exit 1; }
-          [[ "$ACCESS_TEAM_DOMAIN" =~ ^https://[A-Za-z0-9-]+\.cloudflareaccess\.com/?$ ]] || { echo "::error::Set BLOG_ACCESS_TEAM_DOMAIN to https://<team>.cloudflareaccess.com"; exit 1; }
-          [[ "$ACCESS_AUD" =~ ^[A-Za-z0-9]{16,128}$ ]] || { echo "::error::Set BLOG_ACCESS_AUD to the Access application's AUD tag"; exit 1; }
-          [ -z "$ADMIN_EMAILS" ] || [[ "$ADMIN_EMAILS" =~ ^[A-Za-z0-9.@_+,\ -]+$ ]] || { echo "::error::BLOG_ADMIN_EMAILS must be comma-separated email addresses"; exit 1; }
-          public_url=""
-          [ -z "$BLOG_DOMAIN" ] || public_url="https://$BLOG_DOMAIN/"
-          if [ -n "$DRAFT_STORES" ]; then
-            node -e 'const s = JSON.parse(process.argv[1]); if (!Array.isArray(s)) throw new Error("must be a JSON array")' "$DRAFT_STORES"
-            [[ "$DRAFT_STORES" != *"'''"* ]] || { echo "::error::BLOG_DRAFT_STORES must not contain '''"; exit 1; }
+          if [ "$ON_WORKERS_DEV" = "true" ]; then
+            route='workers_dev = true'
           else
-            DRAFT_STORES='[{ "id": "drafts", "label": "Drafts", "type": "r2", "binding": "DRAFTS" }]'
+            route=$(printf 'workers_dev = false\nroutes = [{ pattern = "%s", custom_domain = true }]' "$ADMIN_HOST")
           fi
-
           cat > admin/wrangler.ci.toml <<EOF
-          # Generated by cf-vercel-deploy/.github/workflows/deploy-waxz-md4c-blog.yaml
-          name = "$ADMIN_WORKER_NAME"
+          name = "$WORKER_NAME"
           main = "src/worker.js"
           compatibility_date = "2025-09-01"
           compatibility_flags = ["nodejs_compat"]
-          workers_dev = false
           preview_urls = false
-          routes = [
-            { pattern = "$ADMIN_DOMAIN", custom_domain = true },
-          ]
+          $route
 
           [assets]
           directory = "../dist/admin"
@@ -228,38 +132,28 @@ jobs:
 
           [[r2_buckets]]
           binding = "DRAFTS"
-          bucket_name = "$BLOG_DRAFTS_BUCKET"
+          bucket_name = "$DRAFTS_BUCKET"
 
           [vars]
-          ACCESS_TEAM_DOMAIN = "${ACCESS_TEAM_DOMAIN%/}"
+          ACCESS_TEAM_DOMAIN = "$ACCESS_TEAM_DOMAIN"
           ACCESS_AUD = "$ACCESS_AUD"
-          ADMIN_EMAILS = "$ADMIN_EMAILS"
-          PUBLIC_URL = "$public_url"
-          MAX_UPLOAD_MB = "25"
-          DRAFT_STORES = '''$DRAFT_STORES'''
+          PUBLIC_URL = "$PUBLIC_URL"
           EOF
-          # Show the generated config in the log (the AUD tag is masked).
-          sed 's/^\(ACCESS_AUD = \).*/\1"***"/' admin/wrangler.ci.toml
+          cat admin/wrangler.ci.toml
 
       - name: Deploy the admin Worker
-        if: ${{ inputs.deploy_admin }}
         uses: cloudflare/wrangler-action@v3
         with:
           workingDirectory: "./md4c/wasm"
           wranglerVersion: "4"
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: |
-            deploy --config admin/wrangler.ci.toml
+          command: deploy --config admin/wrangler.ci.toml
 
       - name: Summary
-        if: ${{ always() }}
-        shell: bash
         run: |
           {
-            echo "### md4c blog"
-            echo "- md4c ref: \`${{ inputs.md4c_ref }}\`"
-            echo "- Public bucket: \`$BLOG_BUCKET\` · drafts bucket: \`$BLOG_DRAFTS_BUCKET\` (private)"
-            [ -n "$BLOG_DOMAIN" ] && echo "- Blog: https://$BLOG_DOMAIN/index.html"
-            [ -n "$ADMIN_DOMAIN" ] && [ "${{ inputs.deploy_admin }}" = "true" ] && echo "- Admin: https://$ADMIN_DOMAIN/ (Cloudflare Access login)"
+            echo "### md4c blog deployed"
+            echo "- Blog: ${{ steps.cf.outputs.public_url }}index.html"
+            echo "- Admin: https://${{ steps.cf.outputs.admin_host }}/ (sign in with your admin email)"
           } >> "$GITHUB_STEP_SUMMARY"

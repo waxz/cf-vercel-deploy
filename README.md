@@ -22,38 +22,29 @@ Deploy project to cloudflare workers/pages and vercel
 
 ## md4c blog
 
-Workflow: [deploy-waxz-md4c-blog.yaml](.github/workflows/deploy-waxz-md4c-blog.yaml), run it from
-*Actions → deploy-waxz/md4c-blog → Run workflow*. It:
+Workflow: [deploy-waxz-md4c-blog.yaml](.github/workflows/deploy-waxz-md4c-blog.yaml).
+It needs only the `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` secrets; no variables.
 
-1. builds md4c.wasm, the static site and the admin app from `waxz/md4c` (input `md4c_ref`) and runs the tests;
-2. creates the R2 buckets if needed, and connects `BLOG_DOMAIN` to the public bucket;
-3. publishes the site code and rebuilds the pages from the posts already in the bucket
-   (posts written in the admin are kept; tick `seed_samples` on the first run for example posts);
-4. deploys the admin Worker on `ADMIN_DOMAIN`, behind Cloudflare Access.
+**One-time setup**
 
-Secrets: `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID`. The token needs these permissions:
-- Account: *Workers Scripts: Edit* and *Workers R2 Storage: Edit*;
-- Zone: *Workers Routes: Edit* and *DNS: Edit*, for the custom domains.
+1. Give the API token these permissions:
+   - Account → *Workers Scripts: Edit*
+   - Account → *Workers R2 Storage: Edit*
+   - Account → *Access: Apps and Policies: Edit*
+   - Account → *Access: Organizations, Identity Providers, and Groups: Read*
+   - *only if you use custom domains*: Zone → *Zone: Read*, *Workers Routes: Edit*, *DNS: Edit*
+2. Open **Zero Trust** in the Cloudflare dashboard once, and choose a team name and the Free plan.
+   The workflow needs that team to create the admin's login.
 
-The R2 S3 keys the publish step needs are derived from the token (Access Key ID = token id,
-secret = SHA-256 of the token). Set `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` secrets to use separate keys.
+**Deploy:** *Actions → deploy-waxz/md4c-blog → Run workflow*. On the first run, enter your email in
+**admin_email** and tick **seed_samples** if you want example posts. Later runs can leave both empty.
 
-Variables (*Settings → Secrets and variables → Actions → Variables*):
+The workflow, via [md4c-blog-cloudflare.mjs](.github/scripts/md4c-blog-cloudflare.mjs):
+- creates the R2 buckets `md4c-blog` (public) and `md4c-blog-drafts` (private);
+- publishes the blog on the bucket's `r2.dev` URL, or on **blog_domain** if given;
+- creates a Cloudflare Access application and policy for the admin, allowing only **admin_email**;
+- builds md4c.wasm, the site and the admin app from `waxz/md4c`, publishes the site, and deploys
+  the admin Worker on `md4c-blog-admin.<your-subdomain>.workers.dev`, or on **admin_domain** if given.
 
-| Variable | Example | Needed for |
-|---|---|---|
-| `BLOG_BUCKET` | `md4c-blog` (default) | site |
-| `BLOG_DRAFTS_BUCKET` | `md4c-blog-drafts` (default) | admin, keep it private |
-| `BLOG_DOMAIN`, `BLOG_ZONE_ID` | `blog.example.com`, zone id | public URL of the blog |
-| `ADMIN_DOMAIN` | `admin.blog.example.com` | admin |
-| `BLOG_ACCESS_TEAM_DOMAIN` | `https://myteam.cloudflareaccess.com` | admin |
-| `BLOG_ACCESS_AUD` | Access application AUD tag (or a secret) | admin |
-| `BLOG_ADMIN_EMAILS` | `me@example.com` | admin (optional allowlist) |
-| `BLOG_DRAFT_STORES` | JSON, e.g. adding a WebDAV store | admin (optional) |
-| `BLOG_SITE_JSON` | `{"title": "…", "url": "https://blog.example.com/"}` | optional; overrides the admin's site settings on every run |
-
-Before the first admin deploy, create a Cloudflare Access application (self-hosted) for
-`ADMIN_DOMAIN` with an *Allow* policy for your email. The workflow refuses to deploy the admin
-without the Access settings. WebDAV store passwords are Worker secrets: set them once with
-`npx wrangler secret put NAS_PASSWORD --name md4c-blog-admin`.
-
+Posts you write in the admin are never overwritten by a deploy. The run summary shows the blog and
+admin URLs.

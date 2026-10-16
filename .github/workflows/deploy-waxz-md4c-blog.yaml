@@ -93,12 +93,14 @@ jobs:
           echo "::add-mask::$id"
           echo "::add-mask::$secret"
 
-          # Uploads the site's code and rebuilds the pages from the posts in
-          # the bucket; posts written in the admin are never touched.
+          # Uploads the site's code and rebuilds the pages from the posts;
+          # posts written in the admin are never touched. The posts' Markdown
+          # is kept private, in the drafts bucket under .published/ (as the
+          # admin does), so the public bucket holds only the pages.
           posts=(--no-posts)
           [ "${{ inputs.seed_samples }}" = "true" ] && posts=(--posts blog/posts)
           R2_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID" R2_BUCKET="$BLOG_BUCKET" R2_ACCESS_KEY_ID="$id" R2_SECRET_ACCESS_KEY="$secret" \
-            node scripts/publish.mjs --to r2 --site "${posts[@]}" --site-url "$PUBLIC_URL"
+            node scripts/publish.mjs --to r2 --site "${posts[@]}" --site-url "$PUBLIC_URL" --sources-bucket "$DRAFTS_BUCKET"
 
       - name: Write the admin Worker config
         working-directory: ./md4c/wasm
